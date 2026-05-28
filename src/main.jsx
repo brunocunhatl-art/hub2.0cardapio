@@ -2,13 +2,61 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createClient } from '@supabase/supabase-js';
 import { BellRing, Check, ChevronRight, Gift, Minus, Plus, Printer, Search, ShoppingBag, Store, Truck, WalletCards, X, Clock } from 'lucide-react';
-import { ADDONS, CATEGORIES, CUSCUZ_INCLUDED, CUSCUZ_PREMIUM_INCLUDED, flatMenu, money } from './menu';
+import { ADDONS, CATEGORIES as DEFAULT_CATEGORIES, CUSCUZ_INCLUDED, CUSCUZ_PREMIUM_INCLUDED, flatMenu as DEFAULT_FLAT_MENU, money } from './menu';
 import './style.css';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 const supabase = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
 const ADMIN_PIN = '2026';
+
+const CATEGORY_META = {
+  'Burgers': { id:'burgers', icon:'🍔', addons:'burger' },
+  'Cuscuz': { id:'cuscuz', icon:'🍲', addons:'cuscuz' },
+  'Tapiocas Salgadas': { id:'tapiocas-salgadas', icon:'🥟', addons:'savory' },
+  'Tapiocas Doces': { id:'tapiocas-doces', icon:'🍫', addons:'sweet' },
+  'Sucos Naturais': { id:'sucos', icon:'🥤', addons:null },
+  'Detox': { id:'detox', icon:'🌿', addons:null },
+  'Refrigerantes': { id:'refrigerantes', icon:'🥫', addons:null },
+  'Refrigerantes e Água': { id:'refrigerantes', icon:'🥫', addons:null },
+  'Milkshakes': { id:'milkshakes', icon:'🥛', addons:null }
+};
+function slugify(v){ return String(v||'categoria').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'') || 'categoria'; }
+function categoriesFromProducts(products){
+  const groups = new Map();
+  products.filter(p=>p.active !== false).forEach((p,idx)=>{
+    const catName = p.category_name || p.cat || p.category || 'Cardápio';
+    const meta = CATEGORY_META[catName] || {};
+    const id = p.category_id || meta.id || slugify(catName);
+    if(!groups.has(id)) groups.set(id,{ id, name:catName, icon:p.icon || meta.icon || '🍽️', addons:p.addons ?? meta.addons ?? null, items:[] });
+    groups.get(id).items.push({ id:String(p.id), name:p.name, price:Number(p.price)||0, desc:p.description || p.desc || '', category:id, tags:p.tags || [] });
+  });
+  return [...groups.values()].filter(c=>c.items.length);
+}
+function rowsFromDefaultMenu(){
+  return DEFAULT_CATEGORIES.flatMap((c,ci)=>c.items.map((i,ii)=>({
+    id:i.id, category_id:c.id, category_name:c.name, icon:c.icon, addons:c.addons, name:i.name, description:i.desc, price:i.price, active:true, tags:i.tags||[], sort_order:ci*100+ii
+  })));
+}
+function useDynamicMenu(){
+  const fallbackRows = useMemo(()=>rowsFromDefaultMenu(),[]);
+  const [rows,setRows]=useState(fallbackRows);
+  useEffect(()=>{
+    let channel;
+    async function load(){
+      if(!supabase) return;
+      const {data,error}=await supabase.from('menu_items').select('*').order('sort_order',{ascending:true}).order('created_at',{ascending:true});
+      if(!error && data && data.length) setRows(data);
+    }
+    load();
+    if(supabase){ channel=supabase.channel('menu-items-cardapio').on('postgres_changes',{event:'*',schema:'public',table:'menu_items'}, load).subscribe(); }
+    return()=>{ if(channel) supabase.removeChannel(channel); };
+  },[]);
+  const categories = useMemo(()=>categoriesFromProducts(rows),[rows]);
+  const flatMenu = useMemo(()=>categories.flatMap(c=>c.items),[categories]);
+  return { categories: categories.length ? categories : DEFAULT_CATEGORIES, flatMenu: flatMenu.length ? flatMenu : DEFAULT_FLAT_MENU };
+}
+
 
 function uid(){ return crypto?.randomUUID ? crypto.randomUUID() : String(Date.now()+Math.random()); }
 
@@ -31,18 +79,22 @@ function useStoreStatus(){
   return storeStatus;
 }
 
-function pickUpsell(cart){
+function pickUpsell(cart, flatMenu){
   const ids=new Set(cart.map(i=>i.id));
-  const hasSalgado=cart.some(i=>String(i.id).includes('tap-') || String(i.id).includes('x-') || String(i.id).includes('cuscuz'));
-  const suggestions=['milk-chocolate','milk-choc-nutella','doce-nutella-morango','coca-lata','coca-600'].map(id=>flatMenu.find(p=>p.id===id)).filter(Boolean).filter(p=>!ids.has(p.id));
-  return hasSalgado ? suggestions.slice(0,3) : suggestions.slice(0,2);
+  const hasSalgado=cart.some(i=>String(i.id).includes('tap-') || String(i.id).includes('x-') || String(i.id).includes('cuscuz') || String(i.category).includes('tapioca'));
+  const preferred=['milk-chocolate','milk-choc-nutella','doce-nutella-morango','coca-lata','coca-600'];
+  const suggestions=preferred.map(id=>flatMenu.find(p=>String(p.id)===id)).filter(Boolean).filter(p=>!ids.has(p.id));
+  const fallback=flatMenu.filter(p=>!ids.has(p.id) && /milk|coca|doce|nutella|morango/i.test(p.name)).slice(0,3);
+  const list = suggestions.length ? suggestions : fallback;
+  return hasSalgado ? list.slice(0,3) : list.slice(0,2);
 }
 
 function App(){
   const [view,setView]=useState('cliente');
   const [admin,setAdmin]=useState(false);
   const [secretClicks,setSecretClicks]=useState(0);
-  const [active,setActive]=useState(CATEGORIES[0].id);
+  const {categories, flatMenu} = useDynamicMenu();
+  const [active,setActive]=useState(DEFAULT_CATEGORIES[0].id);
   const [query,setQuery]=useState('');
   const [cart,setCart]=useState([]);
   const [custom,setCustom]=useState(null);
@@ -77,13 +129,14 @@ function App(){
       </div>
     </header>
     {toast && <div className="toast">{toast}</div>}
-    {view === 'loja' && admin ? <AdminPanel/> : <ClientMenu active={active} setActive={setActive} query={query} setQuery={setQuery} setCustom={setCustom} cart={cart} setCart={setCart} total={total} storeStatus={storeStatus}/>} 
+    {view === 'loja' && admin ? <AdminPanel/> : <ClientMenu categories={categories} flatMenu={flatMenu} active={active} setActive={setActive} query={query} setQuery={setQuery} setCustom={setCustom} cart={cart} setCart={setCart} total={total} storeStatus={storeStatus}/>} 
     {custom && <CustomizeModal item={custom} close={()=>setCustom(null)} addToCart={addToCart}/>} 
   </>;
 }
 
-function ClientMenu({active,setActive,query,setQuery,setCustom,cart,setCart,total,storeStatus}){
-  const visible = useMemo(()=> CATEGORIES.map(c=>({...c, items:c.items.filter(i=>(i.name+i.desc+c.name).toLowerCase().includes(query.toLowerCase()))})).filter(c=>c.items.length), [query]);
+function ClientMenu({categories,flatMenu,active,setActive,query,setQuery,setCustom,cart,setCart,total,storeStatus}){
+  useEffect(()=>{ if(!categories.some(c=>c.id===active)) setActive(categories[0]?.id || ''); },[categories,active,setActive]);
+  const visible = useMemo(()=> categories.map(c=>({...c, items:c.items.filter(i=>(i.name+i.desc+c.name).toLowerCase().includes(query.toLowerCase()))})).filter(c=>c.items.length), [query,categories]);
   return <main className="client">
     <section className="hero">
       <div><span className="kicker">Boa comida • boas conexões • bons momentos</span><h1>VERBO HUB</h1><p>Burgers, cuscuz, tapiocas e bebidas com pedido simples, bonito e direto.</p><div className={storeStatus.open?'store-pill open':'store-pill closed'}><Clock size={16}/>{storeStatus.open ? `Loja aberta • ${storeStatus.estimated_minutes} min` : 'Loja fechada para pedidos'}</div></div>
@@ -91,10 +144,10 @@ function ClientMenu({active,setActive,query,setQuery,setCustom,cart,setCart,tota
     </section>
     {!storeStatus.open && <div className="closed-banner"><b>Estamos fechados no momento.</b><span>{storeStatus.message || 'Você pode olhar o cardápio, mas a finalização está bloqueada.'}</span></div>}
     <div className="searchbar"><Search size={18}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Buscar burger, cuscuz, tapioca, suco..."/></div>
-    <nav className="category-tabs">{CATEGORIES.map(c=><a className={active===c.id?'on':''} href={'#'+c.id} onClick={()=>setActive(c.id)} key={c.id}><span>{c.icon}</span>{c.name}</a>)}</nav>
+    <nav className="category-tabs">{categories.map(c=><a className={active===c.id?'on':''} href={'#'+c.id} onClick={()=>setActive(c.id)} key={c.id}><span>{c.icon}</span>{c.name}</a>)}</nav>
     <div className="grid">
       <section className="menu-list">{visible.map(cat=><Category key={cat.id} cat={cat} setCustom={setCustom}/>)}</section>
-      <Checkout cart={cart} setCart={setCart} total={total} setCustom={setCustom} storeStatus={storeStatus}/>
+      <Checkout cart={cart} setCart={setCart} total={total} setCustom={setCustom} storeStatus={storeStatus} categories={categories} flatMenu={flatMenu}/>
     </div>
   </main>;
 }
@@ -185,7 +238,7 @@ function useCoupons(){
   return coupons;
 }
 
-function Checkout({cart,setCart,total,setCustom,storeStatus}){
+function Checkout({cart,setCart,total,setCustom,storeStatus,categories,flatMenu}){
   const [customer,setCustomer]=useState({name:'',phone:'',address:'',reference:''});
   const [delivery,setDelivery]=useState('retirada');
   const [payment,setPayment]=useState('pix');
@@ -220,7 +273,7 @@ function Checkout({cart,setCart,total,setCustom,storeStatus}){
   }
   if(collapsed) return <aside className="checkout collapsed"><button className="primary big" onClick={()=>setCollapsed(false)}><ShoppingBag/> Fazer novo pedido</button></aside>;
   return <aside className="checkout"><h2><ShoppingBag/> Pedido</h2>{cart.length===0 ? <p className="empty">Seu carrinho está esperando aquele pedido caprichado.</p> : cart.map(i=><div className="cart-item" key={i.uid}><div><b>{i.qty}x {i.name}</b>{i.included?.length>0 && <small>Inclusos: {i.included.join(', ')}</small>}{i.addons?.length>0 && <small>Extras: {i.addons.map(a=>a.name).join(', ')}</small>}{i.observation && <small>Obs.: {i.observation}</small>}<span>{money(i.total)}</span></div><button onClick={()=>setCart(c=>c.filter(x=>x.uid!==i.uid))}><X size={16}/></button></div>)}
-    {cart.length>0 && <UpsellBox cart={cart} setCustom={setCustom}/>}
+    {cart.length>0 && <UpsellBox cart={cart} setCustom={setCustom} categories={categories} flatMenu={flatMenu}/>}
     <div className="form"><input placeholder="Nome" value={customer.name} onChange={e=>setCustomer({...customer,name:e.target.value})}/><input placeholder="WhatsApp" value={customer.phone} onChange={e=>setCustomer({...customer,phone:e.target.value})}/>
       <div className="choice"><button className={delivery==='retirada'?'on':''} onClick={()=>setDelivery('retirada')}><Store size={16}/> Retirada</button><button className={delivery==='entrega'?'on':''} onClick={()=>setDelivery('entrega')}><Truck size={16}/> Entrega</button></div>
       {delivery==='entrega' && <><input placeholder="Endereço completo" value={customer.address} onChange={e=>setCustomer({...customer,address:e.target.value})}/><input placeholder="Ponto de referência" value={customer.reference} onChange={e=>setCustomer({...customer,reference:e.target.value})}/></>}
@@ -230,10 +283,10 @@ function Checkout({cart,setCart,total,setCustom,storeStatus}){
 }
 
 
-function UpsellBox({cart,setCustom}){
-  const items=pickUpsell(cart);
+function UpsellBox({cart,setCustom,categories,flatMenu}){
+  const items=pickUpsell(cart, flatMenu);
   if(!items.length) return null;
-  return <section className="upsell-box"><h3><Gift size={18}/> Que tal colocar mais sabor no seu pedido?</h3><p>Combina muito com o que você escolheu:</p><div className="upsell-list">{items.map(p=><button key={p.id} onClick={()=>{ const cat=CATEGORIES.find(c=>c.items.some(i=>i.id===p.id)); setCustom({...p, categoryConfig:cat}); }}><span>{p.name}</span><b>{money(p.price)}</b></button>)}</div></section>;
+  return <section className="upsell-box"><h3><Gift size={18}/> Que tal colocar mais sabor no seu pedido?</h3><p>Combina muito com o que você escolheu:</p><div className="upsell-list">{items.map(p=><button key={p.id} onClick={()=>{ const cat=categories.find(c=>c.items.some(i=>i.id===p.id)); setCustom({...p, categoryConfig:cat}); }}><span>{p.name}</span><b>{money(p.price)}</b></button>)}</div></section>;
 }
 
 function AdminPanel(){
