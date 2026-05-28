@@ -69,3 +69,5 @@ body{min-width:0;overflow-x:hidden}
 .closed-banner{margin:12px 0;padding:14px 16px;border-radius:18px;background:#2a1108;border:1px solid #7c2d12;color:#fed7aa;display:grid;gap:4px}
 .closed-banner span{color:#f9c6a1}.upsell-box{border:1px solid #4b2514;border-radius:20px;background:linear-gradient(145deg,#1f120b,#0d0b0a);padding:14px;margin:12px 0}.upsell-box h3{display:flex;gap:8px;align-items:center;margin:0 0 4px;font-size:17px;color:#ffb07a}.upsell-box p{margin:0 0 10px;color:#cdbfb4;font-size:13px}.upsell-list{display:grid;gap:8px}.upsell-list button{display:flex;justify-content:space-between;gap:10px;border:1px solid #3b2a20;background:#0b0908;color:#fff;border-radius:14px;padding:11px;font-weight:900}.upsell-list b{color:#ff7b22}.primary:disabled{opacity:.55;cursor:not-allowed}
 @media(max-width:720px){.closed-banner{font-size:15px}.upsell-box{padding:13px}.upsell-list button{min-height:48px;font-size:15px}.store-pill{font-size:13px}}
+
+.coupon-row{display:flex;gap:8px;align-items:center}.coupon-row input{flex:1}.checkout.collapsed{position:sticky;top:90px}.ok{color:#14853d}.warn{color:#b42318}

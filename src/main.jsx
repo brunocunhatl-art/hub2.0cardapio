@@ -164,38 +164,76 @@ function getAddonGroups(item, config){
   return [];
 }
 
+
+function normalizeCouponCode(value){ return String(value||'').trim().toUpperCase(); }
+
+function useCoupons(){
+  const [coupons,setCoupons]=useState([]);
+  useEffect(()=>{
+    let channel;
+    async function load(){
+      if(!supabase) return;
+      const {data,error}=await supabase.from('coupons').select('*').eq('active',true).order('created_at',{ascending:false});
+      if(!error) setCoupons(data||[]);
+    }
+    load();
+    if(supabase){
+      channel=supabase.channel('coupons-cardapio').on('postgres_changes',{event:'*',schema:'public',table:'coupons'}, load).subscribe();
+    }
+    return()=>{ if(channel) supabase.removeChannel(channel); };
+  },[]);
+  return coupons;
+}
+
 function Checkout({cart,setCart,total,setCustom,storeStatus}){
   const [customer,setCustomer]=useState({name:'',phone:'',address:'',reference:''});
   const [delivery,setDelivery]=useState('retirada');
   const [payment,setPayment]=useState('pix');
   const [changeFor,setChangeFor]=useState('');
   const [sending,setSending]=useState(false);
+  const [couponCode,setCouponCode]=useState('');
+  const [appliedCoupon,setAppliedCoupon]=useState(null);
+  const [couponMessage,setCouponMessage]=useState('');
+  const [collapsed,setCollapsed]=useState(false);
+  const coupons = useCoupons();
   const deliveryFee = delivery === 'entrega' ? 0 : 0;
-  const finalTotal = total + deliveryFee;
+  const discount = appliedCoupon ? Math.min(total + deliveryFee, ((total + deliveryFee) * (Number(appliedCoupon.percent)||0)) / 100) : 0;
+  const finalTotal = Math.max(0, total + deliveryFee - discount);
+  function applyCoupon(){
+    const code = normalizeCouponCode(couponCode);
+    if(!code){ setCouponMessage('Digite o nome do cupom.'); return; }
+    const found = coupons.find(c=>normalizeCouponCode(c.code || c.name) === code && c.active !== false);
+    if(!found){ setAppliedCoupon(null); setCouponMessage('Cupom não encontrado ou inativo.'); return; }
+    setAppliedCoupon(found); setCouponCode(code); setCouponMessage(`Cupom aplicado: ${Number(found.percent)||0}% de desconto.`);
+  }
+  function clearCoupon(){ setAppliedCoupon(null); setCouponCode(''); setCouponMessage(''); }
   async function send(){
     if(!storeStatus.open) return alert('A loja está fechada no momento.');
     if(!cart.length) return alert('Seu pedido está vazio.');
     if(!customer.name || !customer.phone) return alert('Informe nome e WhatsApp.');
     if(delivery==='entrega' && !customer.address) return alert('Informe o endereço para entrega.');
-    const payload = { customer, items:cart, subtotal:total, delivery_fee:deliveryFee, discount:0, extra:0, total:finalTotal, payment_method:payment, change_for:changeFor, order_type:delivery, status:'novo', fiado:false, source:'verbo-hub-cardapio' };
+    const coupon = appliedCoupon ? { id:appliedCoupon.id, code:appliedCoupon.code || appliedCoupon.name, percent:Number(appliedCoupon.percent)||0 } : null;
+    const payload = { customer, items:cart, subtotal:total, delivery_fee:deliveryFee, discount, coupon, extra:0, total:finalTotal, payment_method:payment, change_for:changeFor, order_type:delivery, status:'novo', fiado:false, source:'verbo-hub-cardapio' };
     setSending(true);
     if(supabase){ const {error}=await supabase.from('orders').insert(payload); if(error){ alert('Erro ao salvar no Supabase: '+error.message); setSending(false); return; } }
-    setCart([]); setSending(false); alert('Pedido enviado e sincronizado com o aplicativo da loja!');
+    setCart([]); setAppliedCoupon(null); setCouponCode(''); setCouponMessage(''); setSending(false); setCollapsed(true); alert('Pedido enviado e sincronizado com o aplicativo da loja!');
   }
+  if(collapsed) return <aside className="checkout collapsed"><button className="primary big" onClick={()=>setCollapsed(false)}><ShoppingBag/> Fazer novo pedido</button></aside>;
   return <aside className="checkout"><h2><ShoppingBag/> Pedido</h2>{cart.length===0 ? <p className="empty">Seu carrinho está esperando aquele pedido caprichado.</p> : cart.map(i=><div className="cart-item" key={i.uid}><div><b>{i.qty}x {i.name}</b>{i.included?.length>0 && <small>Inclusos: {i.included.join(', ')}</small>}{i.addons?.length>0 && <small>Extras: {i.addons.map(a=>a.name).join(', ')}</small>}{i.observation && <small>Obs.: {i.observation}</small>}<span>{money(i.total)}</span></div><button onClick={()=>setCart(c=>c.filter(x=>x.uid!==i.uid))}><X size={16}/></button></div>)}
     {cart.length>0 && <UpsellBox cart={cart} setCustom={setCustom}/>}
     <div className="form"><input placeholder="Nome" value={customer.name} onChange={e=>setCustomer({...customer,name:e.target.value})}/><input placeholder="WhatsApp" value={customer.phone} onChange={e=>setCustomer({...customer,phone:e.target.value})}/>
       <div className="choice"><button className={delivery==='retirada'?'on':''} onClick={()=>setDelivery('retirada')}><Store size={16}/> Retirada</button><button className={delivery==='entrega'?'on':''} onClick={()=>setDelivery('entrega')}><Truck size={16}/> Entrega</button></div>
       {delivery==='entrega' && <><input placeholder="Endereço completo" value={customer.address} onChange={e=>setCustomer({...customer,address:e.target.value})}/><input placeholder="Ponto de referência" value={customer.reference} onChange={e=>setCustomer({...customer,reference:e.target.value})}/></>}
+      <label>Cupom de desconto</label><div className="coupon-row"><input placeholder="Digite seu cupom" value={couponCode} onChange={e=>setCouponCode(e.target.value.toUpperCase())}/><button type="button" onClick={applyCoupon}>Aplicar</button>{appliedCoupon&&<button type="button" className="ghost" onClick={clearCoupon}>Remover</button>}</div>{couponMessage&&<small className={appliedCoupon?'ok':'warn'}>{couponMessage}</small>}
       <label>Pagamento</label><div className="paygrid">{[['pix','Pix'],['dinheiro','Dinheiro'],['credito','Crédito'],['debito','Débito']].map(([id,label])=><button className={payment===id?'on':''} onClick={()=>setPayment(id)} key={id}><WalletCards size={16}/>{label}</button>)}</div>
-      {payment==='dinheiro' && <input placeholder="Troco para quanto?" value={changeFor} onChange={e=>setChangeFor(e.target.value)}/>}<div className="summary"><span>Subtotal</span><b>{money(total)}</b><span>Entrega</span><b>{delivery==='entrega'?'Consultar':'Retirada'}</b><strong>Total</strong><strong>{money(finalTotal)}</strong></div><button className="primary big" onClick={send} disabled={sending || !storeStatus.open}>{!storeStatus.open?'Loja fechada':(sending?'Enviando...':'Finalizar pedido')} <ChevronRight size={18}/></button></div></aside>;
+      {payment==='dinheiro' && <input placeholder="Troco para quanto?" value={changeFor} onChange={e=>setChangeFor(e.target.value)}/>}<div className="summary"><span>Subtotal</span><b>{money(total)}</b><span>Entrega</span><b>{delivery==='entrega'?'Consultar':'Retirada'}</b>{discount>0&&<><span>Desconto {appliedCoupon?.code || appliedCoupon?.name}</span><b>-{money(discount)}</b></>}<strong>Total</strong><strong>{money(finalTotal)}</strong></div><button className="primary big" onClick={send} disabled={sending || !storeStatus.open}>{!storeStatus.open?'Loja fechada':(sending?'Enviando...':'Finalizar pedido')} <ChevronRight size={18}/></button></div></aside>;
 }
 
 
 function UpsellBox({cart,setCustom}){
   const items=pickUpsell(cart);
   if(!items.length) return null;
-  return <section className="upsell-box"><h3><Gift size={18}/> Que tal vender mais sabor para seu pedido?</h3><p>Combina muito com o que você escolheu:</p><div className="upsell-list">{items.map(p=><button key={p.id} onClick={()=>{ const cat=CATEGORIES.find(c=>c.items.some(i=>i.id===p.id)); setCustom({...p, categoryConfig:cat}); }}><span>{p.name}</span><b>{money(p.price)}</b></button>)}</div></section>;
+  return <section className="upsell-box"><h3><Gift size={18}/> Que tal colocar mais sabor no seu pedido?</h3><p>Combina muito com o que você escolheu:</p><div className="upsell-list">{items.map(p=><button key={p.id} onClick={()=>{ const cat=CATEGORIES.find(c=>c.items.some(i=>i.id===p.id)); setCustom({...p, categoryConfig:cat}); }}><span>{p.name}</span><b>{money(p.price)}</b></button>)}</div></section>;
 }
 
 function AdminPanel(){
