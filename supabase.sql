@@ -2,6 +2,7 @@ create table if not exists public.orders (
   id uuid primary key default gen_random_uuid(),
   created_at timestamptz not null default now()
 );
+
 alter table public.orders add column if not exists updated_at timestamptz not null default now();
 alter table public.orders add column if not exists customer jsonb not null default '{}'::jsonb;
 alter table public.orders add column if not exists items jsonb not null default '[]'::jsonb;
@@ -16,6 +17,7 @@ alter table public.orders add column if not exists order_type text default 'reti
 alter table public.orders add column if not exists source text default 'verbo-hub';
 alter table public.orders add column if not exists status text default 'novo';
 alter table public.orders add column if not exists fiado boolean not null default false;
+alter table public.orders add column if not exists order_number bigint;
 
 create table if not exists public.store_settings (
   id text primary key default 'main',
@@ -24,6 +26,7 @@ create table if not exists public.store_settings (
   message text default 'Estamos recebendo pedidos normalmente.',
   updated_at timestamptz not null default now()
 );
+
 insert into public.store_settings (id, is_open, estimated_minutes, message)
 values ('main', true, 25, 'Estamos recebendo pedidos normalmente.')
 on conflict (id) do nothing;
@@ -45,10 +48,7 @@ begin
   if not exists (select 1 from pg_policies where schemaname='public' and tablename='store_settings' and policyname='store_settings_read_public') then
     create policy "store_settings_read_public" on public.store_settings for select using (true);
   end if;
-  if not exists (select 1 from pg_policies where schemaname='public' and tablename='store_settings' and policyname='store_settings_insert_public') then
-    create policy "store_settings_insert_public" on public.store_settings for insert with check (true);
-  end if;
-  if not exists (select 1 from pg_policies where schemaname='public' and tablename='store_settings' and policyname='store_settings_update_public') then
-    create policy "store_settings_update_public" on public.store_settings for update using (true) with check (true);
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='store_settings' and policyname='store_settings_write_public') then
+    create policy "store_settings_write_public" on public.store_settings for all using (true) with check (true);
   end if;
 end $$;

@@ -1,11 +1,232 @@
-import React,{useEffect,useMemo,useState}from'react';import{createRoot}from'react-dom/client';import{ShoppingCart,Plus,X,Clock,Store,Search,QrCode,Bike,Flame,Star}from'lucide-react';import{supabase,hasSupabase}from'./supabase';import{categories,products,additions}from'./menu';import'./style.css';
-const money=v=>Number(v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});const uid=()=>Math.random().toString(36).slice(2,10);
-function App(){const[store,setStore]=useState({open:true,estimated_minutes:25,message:''});const[active,setActive]=useState('mais');const[q,setQ]=useState('');const[cart,setCart]=useState([]);const[modal,setModal]=useState(null);const[checkout,setCheckout]=useState(false);const[ok,setOk]=useState(false);
-useEffect(()=>{let ch;async function load(){if(!hasSupabase)return;let{data}=await supabase.from('store_settings').select('*').eq('id','main').maybeSingle();if(data)setStore({open:data.is_open!==false,estimated_minutes:data.estimated_minutes||25,message:data.message||''});ch=supabase.channel('store_cardapio').on('postgres_changes',{event:'*',schema:'public',table:'store_settings'},p=>{let d=p.new;if(d?.id==='main')setStore({open:d.is_open!==false,estimated_minutes:d.estimated_minutes||25,message:d.message||''})}).subscribe()}load();return()=>{if(ch)supabase.removeChannel(ch)}},[]);
-const list=useMemo(()=>products.filter(p=>(q?`${p.name} ${p.desc}`.toLowerCase().includes(q.toLowerCase()):p.cat===active)),[active,q]);const total=cart.reduce((s,i)=>s+i.total*i.qty,0);const count=cart.reduce((s,i)=>s+i.qty,0);
-function add(p){setCart(c=>[...c,{lineId:uid(),id:p.id,name:p.name,qty:1,price:p.price,addons:[],note:'',total:p.price}])}function open(p){p.addons?setModal(p):add(p)}
-async function finish(f){if(!store.open)return alert('A loja está fechada.');let fee=f.order_type==='entrega'?Number(f.delivery_fee||0):0;let payload={customer:{name:f.name,phone:f.phone,address:f.address||'',note:f.note||''},items:cart,subtotal:total,delivery_fee:fee,discount:0,extra:0,total:total+fee,payment_method:f.payment_method,change_for:f.change_for||'',order_type:f.order_type,source:'cardapio-digital',status:'novo',fiado:false};if(hasSupabase){let{error}=await supabase.from('orders').insert(payload);if(error)return alert(error.message)}setCart([]);setCheckout(false);setOk(true)}
-return <div className="app"><header><div className="top"><div className="logo">VH</div><div><h1>VERBO HUB</h1><p>{store.open?'Aberto para pedidos':'Fechado no momento'}</p></div><b className={store.open?'badge on':'badge off'}>{store.open?'Aberto':'Fechado'}</b></div><div className="hero"><span><Clock/> {store.estimated_minutes} min</span><span><Store/> Retirada ou entrega</span></div>{!store.open&&<div className="closed">Loja fechada para novos pedidos. Você pode ver o cardápio.</div>}<label className="search"><Search/><input value={q} onChange={e=>setQ(e.target.value)} placeholder="Buscar produto..."/></label></header><nav>{categories.map(([id,n])=><button className={!q&&active===id?'active':''}onClick={()=>{setQ('');setActive(id)}}key={id}>{n}</button>)}</nav><main><section className="promo"><Flame/><b>Mais vendidos</b><span>pedido direto no painel</span></section>{list.map(p=><article className="product" onClick={()=>open(p)} key={p.id}><div className="ico">{p.cat==='bebidas'?'🥤':p.cat==='burgers'?'🍔':p.cat==='cuscuz'?'🌽':'🫓'}</div><div><h2>{p.name}{p.cat==='mais'&&<small><Star size={12}/>top</small>}</h2><p>{p.desc}</p><strong>{money(p.price)}</strong></div><button><Plus/></button></article>)}</main>{count>0&&<button className="cart"onClick={()=>setCheckout(true)}><span><ShoppingCart/> {count} item{count>1?'s':''}</span><b>{money(total)}</b></button>}{modal&&<Modal p={modal} close={()=>setModal(null)} add={i=>{setCart(c=>[...c,i]);setModal(null)}}/>}{checkout&&<Checkout store={store}cart={cart}setCart={setCart}total={total}close={()=>setCheckout(false)}finish={finish}/>} {ok&&<div className="overlay"><div className="sheet"><button className="x"onClick={()=>setOk(false)}><X/></button><h2>Pedido enviado 🔥</h2><p>Seu pedido já apareceu no painel da loja.</p><button className="primary"onClick={()=>setOk(false)}>Ok</button></div></div>}</div>}
-function Modal({p,close,add}){const[sel,setSel]=useState([]),[note,setNote]=useState('');let av=additions.filter(a=>!(p.block||[]).includes(a.id));let sum=sel.reduce((s,id)=>s+(av.find(a=>a.id===id)?.price||0),0);return <div className="overlay"><div className="sheet"><button className="x"onClick={close}><X/></button><h2>{p.name}</h2><p>{p.desc}</p><h3>{money(p.price)}</h3><b>Adicionais pagos</b>{av.map(a=><label className="addon"key={a.id}><input type="checkbox"checked={sel.includes(a.id)}onChange={e=>setSel(s=>e.target.checked?[...s,a.id]:s.filter(x=>x!==a.id))}/><span>{a.name}</span><strong>+ {money(a.price)}</strong></label>)}<textarea placeholder="Observação: tirar algo, pouco molho..."value={note}onChange={e=>setNote(e.target.value)}/><button className="primary"onClick={()=>add({lineId:uid(),id:p.id,name:p.name,qty:1,price:p.price,addons:av.filter(a=>sel.includes(a.id)),note,total:p.price+sum})}>Adicionar • {money(p.price+sum)}</button></div></div>}
-function Checkout({store,cart,setCart,total,close,finish}){const[f,setF]=useState({order_type:'retirada',payment_method:'pix'});let fee=f.order_type==='entrega'?Number(f.delivery_fee||0):0;return <div className="overlay"><div className="sheet"><button className="x"onClick={close}><X/></button><h2>Finalizar pedido</h2>{!store.open&&<div className="closed">Loja fechada. Finalização bloqueada.</div>}{cart.map(i=><div className="line"key={i.lineId}><b>{i.qty}x {i.name}</b><span>{money(i.total*i.qty)}</span><button onClick={()=>setCart(c=>c.filter(x=>x.lineId!==i.lineId))}>remover</button></div>)}<div className="seg"><button className={f.order_type==='retirada'?'active':''}onClick={()=>setF({...f,order_type:'retirada'})}>Retirada</button><button className={f.order_type==='entrega'?'active':''}onClick={()=>setF({...f,order_type:'entrega'})}><Bike size={16}/> Entrega</button></div><input placeholder="Nome"onChange={e=>setF({...f,name:e.target.value})}/><input placeholder="Telefone/WhatsApp"onChange={e=>setF({...f,phone:e.target.value})}/>{f.order_type==='entrega'&&<><input placeholder="Endereço"onChange={e=>setF({...f,address:e.target.value})}/><input type="number"placeholder="Taxa de entrega"onChange={e=>setF({...f,delivery_fee:e.target.value})}/></>}<select onChange={e=>setF({...f,payment_method:e.target.value})}><option value="pix">PIX</option><option value="cartao">Cartão</option><option value="dinheiro">Dinheiro</option></select>{f.payment_method==='dinheiro'&&<input placeholder="Troco para quanto?"onChange={e=>setF({...f,change_for:e.target.value})}/>}<textarea placeholder="Observação geral"onChange={e=>setF({...f,note:e.target.value})}/><div className="pix"><QrCode/> PIX na entrega/retirada. QR automático entra na próxima versão.</div><div className="total"><span>Total</span><b>{money(total+fee)}</b></div><button className="primary"disabled={!store.open||!f.name||!f.phone||!cart.length}onClick={()=>finish(f)}>Enviar para loja</button></div></div>}
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createRoot } from 'react-dom/client';
+import { createClient } from '@supabase/supabase-js';
+import { BellRing, Check, ChevronRight, Gift, Minus, Plus, Printer, Search, ShoppingBag, Store, Truck, WalletCards, X, Clock } from 'lucide-react';
+import { ADDONS, CATEGORIES, CUSCUZ_INCLUDED, CUSCUZ_PREMIUM_INCLUDED, flatMenu, money } from './menu';
+import './style.css';
+
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const supabase = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
+const ADMIN_PIN = '2026';
+
+function uid(){ return crypto?.randomUUID ? crypto.randomUUID() : String(Date.now()+Math.random()); }
+
+function useStoreStatus(){
+  const [storeStatus,setStoreStatus]=useState({open:true,estimated_minutes:25,message:'Estamos recebendo pedidos normalmente.'});
+  useEffect(()=>{
+    let channel;
+    async function load(){
+      if(!supabase) return;
+      const {data}=await supabase.from('store_settings').select('*').eq('id','main').maybeSingle();
+      if(data) setStoreStatus({open:data.is_open !== false, estimated_minutes:data.estimated_minutes||25, message:data.message||''});
+      channel=supabase.channel('store-settings-cardapio').on('postgres_changes',{event:'*',schema:'public',table:'store_settings'}, payload=>{
+        const row=payload.new;
+        if(row?.id==='main') setStoreStatus({open:row.is_open !== false, estimated_minutes:row.estimated_minutes||25, message:row.message||''});
+      }).subscribe();
+    }
+    load();
+    return()=>{ if(channel) supabase.removeChannel(channel); };
+  },[]);
+  return storeStatus;
+}
+
+function pickUpsell(cart){
+  const ids=new Set(cart.map(i=>i.id));
+  const hasSalgado=cart.some(i=>String(i.id).includes('tap-') || String(i.id).includes('x-') || String(i.id).includes('cuscuz'));
+  const suggestions=['milk-chocolate','milk-choc-nutella','doce-nutella-morango','coca-lata','coca-600'].map(id=>flatMenu.find(p=>p.id===id)).filter(Boolean).filter(p=>!ids.has(p.id));
+  return hasSalgado ? suggestions.slice(0,3) : suggestions.slice(0,2);
+}
+
+function App(){
+  const [view,setView]=useState('cliente');
+  const [admin,setAdmin]=useState(false);
+  const [secretClicks,setSecretClicks]=useState(0);
+  const [active,setActive]=useState(CATEGORIES[0].id);
+  const [query,setQuery]=useState('');
+  const [cart,setCart]=useState([]);
+  const [custom,setCustom]=useState(null);
+  const [toast,setToast]=useState('');
+  const total = cart.reduce((s,i)=>s+i.total,0);
+  const storeStatus = useStoreStatus();
+
+  function openAdmin(){
+    const next = secretClicks + 1;
+    setSecretClicks(next);
+    if(next >= 5){
+      const pin = prompt('Área da loja');
+      if(pin === ADMIN_PIN){ setAdmin(true); setView('loja'); }
+      setSecretClicks(0);
+    }
+  }
+
+  function addToCart(item){
+    setCart(c=>[...c,item]);
+    setToast('Item adicionado ao pedido 🧡');
+    setTimeout(()=>setToast(''),1400);
+  }
+
+  return <>
+    <header className="topbar">
+      <button className="brand" onClick={openAdmin} aria-label="Verbo Hub">
+        <img src="/logo-verbo-hub.png" alt="Verbo Hub" />
+      </button>
+      <div className="top-actions">
+        <button className="ghost" onClick={()=>setView('cliente')}>Cardápio</button>
+        <button className="adminBtn" onClick={()=>admin?setView('loja'):openAdmin()}><Store size={18}/> Loja</button>
+      </div>
+    </header>
+    {toast && <div className="toast">{toast}</div>}
+    {view === 'loja' && admin ? <AdminPanel/> : <ClientMenu active={active} setActive={setActive} query={query} setQuery={setQuery} setCustom={setCustom} cart={cart} setCart={setCart} total={total} storeStatus={storeStatus}/>} 
+    {custom && <CustomizeModal item={custom} close={()=>setCustom(null)} addToCart={addToCart}/>} 
+  </>;
+}
+
+function ClientMenu({active,setActive,query,setQuery,setCustom,cart,setCart,total,storeStatus}){
+  const visible = useMemo(()=> CATEGORIES.map(c=>({...c, items:c.items.filter(i=>(i.name+i.desc+c.name).toLowerCase().includes(query.toLowerCase()))})).filter(c=>c.items.length), [query]);
+  return <main className="client">
+    <section className="hero">
+      <div><span className="kicker">Boa comida • boas conexões • bons momentos</span><h1>VERBO HUB</h1><p>Burgers, cuscuz, tapiocas e bebidas com pedido simples, bonito e direto.</p><div className={storeStatus.open?'store-pill open':'store-pill closed'}><Clock size={16}/>{storeStatus.open ? `Loja aberta • ${storeStatus.estimated_minutes} min` : 'Loja fechada para pedidos'}</div></div>
+      <div className="hero-card"><b>VERBO HUB</b><small>Escolha, personalize, coloque observação e finalize.</small></div>
+    </section>
+    {!storeStatus.open && <div className="closed-banner"><b>Estamos fechados no momento.</b><span>{storeStatus.message || 'Você pode olhar o cardápio, mas a finalização está bloqueada.'}</span></div>}
+    <div className="searchbar"><Search size={18}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Buscar burger, cuscuz, tapioca, suco..."/></div>
+    <nav className="category-tabs">{CATEGORIES.map(c=><a className={active===c.id?'on':''} href={'#'+c.id} onClick={()=>setActive(c.id)} key={c.id}><span>{c.icon}</span>{c.name}</a>)}</nav>
+    <div className="grid">
+      <section className="menu-list">{visible.map(cat=><Category key={cat.id} cat={cat} setCustom={setCustom}/>)}</section>
+      <Checkout cart={cart} setCart={setCart} total={total} setCustom={setCustom} storeStatus={storeStatus}/>
+    </div>
+  </main>;
+}
+
+function Category({cat,setCustom}){
+  return <section className="category" id={cat.id}>
+    <div className="cat-title"><span>{cat.icon}</span><h2>{cat.name}</h2></div>
+    <div className="cards">{cat.items.map(item=><article className="product" key={item.id} onClick={()=>setCustom({...item, categoryConfig:cat})}>
+      <div className="product-info"><div>{item.tags?.map(t=><em key={t}>{t}</em>)}</div><h3>{item.name}</h3><p>{item.desc || 'Produto Verbo Hub feito com carinho.'}</p><b>{money(item.price)}</b></div>
+      <button><Plus size={18}/></button>
+    </article>)}</div>
+  </section>;
+}
+
+function CustomizeModal({item,close,addToCart}){
+  const [qty,setQty]=useState(1);
+  const [observation,setObservation]=useState('');
+  const [selectedAddons,setSelectedAddons]=useState([]);
+  const [included,setIncluded]=useState([]);
+  const config = item.categoryConfig;
+  const isPremiumCuscuz = item.id === 'cuscuz-premium';
+  const isCuscuzBase = item.id === 'cuscuz-base';
+  const hasAddons = !!config.addons && !isPremiumCuscuz;
+  const isCuscuz = isCuscuzBase;
+  const includedChoices = CUSCUZ_INCLUDED;
+  const addonGroups = getAddonGroups(item, config);
+  const addonsTotal = selectedAddons.reduce((s,a)=>s+a.price,0);
+  const unitTotal = item.price + addonsTotal;
+  const total = unitTotal * qty;
+
+  function toggleAddon(addon){
+    setSelectedAddons(list => list.some(a=>a.name===addon.name) ? list.filter(a=>a.name!==addon.name) : [...list, addon]);
+  }
+  function toggleIncluded(name){
+    setIncluded(list => list.includes(name) ? list.filter(x=>x!==name) : (list.length >= 3 ? list : [...list,name]));
+  }
+  function confirm(){
+    if(isCuscuz && included.length > 3) return alert('Escolha no máximo 3 adicionais inclusos para o cuscuz base.');
+    const finalIncluded = isPremiumCuscuz ? CUSCUZ_PREMIUM_INCLUDED : included;
+    addToCart({ uid:uid(), id:item.id, name:item.name, basePrice:item.price, qty, addons:selectedAddons, included:finalIncluded, observation, total });
+    close();
+  }
+
+  return <div className="modal" role="dialog"><div className="sheet">
+    <button className="close" onClick={close}><X/></button>
+    <h2>{item.name}</h2><p className="desc">{item.desc}</p><strong className="price">{money(item.price)}</strong>
+    {isPremiumCuscuz && <div className="no-addons"><b>Produto fechado.</b><br/>Acompanha carne seca, mussarela e queijo coalho. Não possui adicionais.</div>}
+    {isCuscuz && <section className="custom-section"><h4>Escolha até 3 adicionais inclusos <small>{included.length}/3</small></h4><div className="chips">{includedChoices.map(x=><button className={included.includes(x)?'on':''} onClick={()=>toggleIncluded(x)} key={x}>{included.includes(x)&&<Check size={14}/>} {x}</button>)}</div><small className="hint">No cuscuz base, carne seca não entra como adicional incluso.</small></section>}
+    {hasAddons && <section className="custom-section"><h4>Adicionais extras</h4>{addonGroups.map(g=><div key={g.title}><b className="group-title">{g.title}</b><div className="chips">{g.items.map(a=><button className={selectedAddons.some(x=>x.name===a.name)?'on':''} onClick={()=>toggleAddon(a)} key={a.name}>{selectedAddons.some(x=>x.name===a.name)&&<Check size={14}/>} {a.name} +{money(a.price)}</button>)}</div></div>)}</section>}
+    {!hasAddons && !isPremiumCuscuz && <div className="no-addons">Sem adicionais para esta categoria. Você ainda pode colocar observações.</div>}
+    <section className="custom-section"><h4>Observações</h4><textarea value={observation} onChange={e=>setObservation(e.target.value)} placeholder="Ex.: tirar tomate, maionese à parte, ponto da carne..."/></section>
+    <div className="qty"><button onClick={()=>setQty(Math.max(1,qty-1))}><Minus/></button><span>{qty}</span><button onClick={()=>setQty(qty+1)}><Plus/></button></div>
+    <button className="primary big" onClick={confirm}>Adicionar ao pedido • {money(total)}</button>
+  </div></div>;
+}
+
+function getAddonGroups(item, config){
+  if(config.addons === 'burger') return [{title:'Extras para burger', items:ADDONS.burger.map(([name,price])=>({name,price}))}];
+  if(config.addons === 'savory') return [{title:'Extras salgados', items:ADDONS.savory.map(([name,price])=>({name,price}))}];
+  if(config.addons === 'sweet') return [{title:'Extras doces', items:ADDONS.sweet.map(([name,price])=>({name,price}))}];
+  if(item.id === 'cuscuz-premium') return [];
+  if(config.addons === 'cuscuz') {
+    const common = ADDONS.cuscuzCommon.map(([name,price])=>({name,price}));
+    const premium = ADDONS.cuscuzPremium.map(([name,price])=>({name,price}));
+    return [{title:'Comuns',items:common},{title:'Premium',items:premium}];
+  }
+  return [];
+}
+
+function Checkout({cart,setCart,total,setCustom,storeStatus}){
+  const [customer,setCustomer]=useState({name:'',phone:'',address:'',reference:''});
+  const [delivery,setDelivery]=useState('retirada');
+  const [payment,setPayment]=useState('pix');
+  const [changeFor,setChangeFor]=useState('');
+  const [sending,setSending]=useState(false);
+  const deliveryFee = delivery === 'entrega' ? 0 : 0;
+  const finalTotal = total + deliveryFee;
+  async function send(){
+    if(!storeStatus.open) return alert('A loja está fechada no momento.');
+    if(!cart.length) return alert('Seu pedido está vazio.');
+    if(!customer.name || !customer.phone) return alert('Informe nome e WhatsApp.');
+    if(delivery==='entrega' && !customer.address) return alert('Informe o endereço para entrega.');
+    const payload = { customer, items:cart, subtotal:total, delivery_fee:deliveryFee, discount:0, extra:0, total:finalTotal, payment_method:payment, change_for:changeFor, order_type:delivery, status:'novo', fiado:false, source:'verbo-hub-cardapio' };
+    setSending(true);
+    if(supabase){ const {error}=await supabase.from('orders').insert(payload); if(error){ alert('Erro ao salvar no Supabase: '+error.message); setSending(false); return; } }
+    setCart([]); setSending(false); alert('Pedido enviado e sincronizado com o aplicativo da loja!');
+  }
+  return <aside className="checkout"><h2><ShoppingBag/> Pedido</h2>{cart.length===0 ? <p className="empty">Seu carrinho está esperando aquele pedido caprichado.</p> : cart.map(i=><div className="cart-item" key={i.uid}><div><b>{i.qty}x {i.name}</b>{i.included?.length>0 && <small>Inclusos: {i.included.join(', ')}</small>}{i.addons?.length>0 && <small>Extras: {i.addons.map(a=>a.name).join(', ')}</small>}{i.observation && <small>Obs.: {i.observation}</small>}<span>{money(i.total)}</span></div><button onClick={()=>setCart(c=>c.filter(x=>x.uid!==i.uid))}><X size={16}/></button></div>)}
+    {cart.length>0 && <UpsellBox cart={cart} setCustom={setCustom}/>}
+    <div className="form"><input placeholder="Nome" value={customer.name} onChange={e=>setCustomer({...customer,name:e.target.value})}/><input placeholder="WhatsApp" value={customer.phone} onChange={e=>setCustomer({...customer,phone:e.target.value})}/>
+      <div className="choice"><button className={delivery==='retirada'?'on':''} onClick={()=>setDelivery('retirada')}><Store size={16}/> Retirada</button><button className={delivery==='entrega'?'on':''} onClick={()=>setDelivery('entrega')}><Truck size={16}/> Entrega</button></div>
+      {delivery==='entrega' && <><input placeholder="Endereço completo" value={customer.address} onChange={e=>setCustomer({...customer,address:e.target.value})}/><input placeholder="Ponto de referência" value={customer.reference} onChange={e=>setCustomer({...customer,reference:e.target.value})}/></>}
+      <label>Pagamento</label><div className="paygrid">{[['pix','Pix'],['dinheiro','Dinheiro'],['credito','Crédito'],['debito','Débito']].map(([id,label])=><button className={payment===id?'on':''} onClick={()=>setPayment(id)} key={id}><WalletCards size={16}/>{label}</button>)}</div>
+      {payment==='dinheiro' && <input placeholder="Troco para quanto?" value={changeFor} onChange={e=>setChangeFor(e.target.value)}/>}<div className="summary"><span>Subtotal</span><b>{money(total)}</b><span>Entrega</span><b>{delivery==='entrega'?'Consultar':'Retirada'}</b><strong>Total</strong><strong>{money(finalTotal)}</strong></div><button className="primary big" onClick={send} disabled={sending || !storeStatus.open}>{!storeStatus.open?'Loja fechada':(sending?'Enviando...':'Finalizar pedido')} <ChevronRight size={18}/></button></div></aside>;
+}
+
+
+function UpsellBox({cart,setCustom}){
+  const items=pickUpsell(cart);
+  if(!items.length) return null;
+  return <section className="upsell-box"><h3><Gift size={18}/> Que tal vender mais sabor para seu pedido?</h3><p>Combina muito com o que você escolheu:</p><div className="upsell-list">{items.map(p=><button key={p.id} onClick={()=>{ const cat=CATEGORIES.find(c=>c.items.some(i=>i.id===p.id)); setCustom({...p, categoryConfig:cat}); }}><span>{p.name}</span><b>{money(p.price)}</b></button>)}</div></section>;
+}
+
+function AdminPanel(){
+  const [orders,setOrders]=useState([]);
+  const [muted,setMuted]=useState(false);
+  const lastSeen=useRef(null);
+  const audioRef=useRef(null);
+
+  async function load(){
+    if(!supabase) return;
+    const {data}=await supabase.from('orders').select('*').order('created_at',{ascending:false}).limit(100);
+    setOrders(data||[]);
+  }
+  function startAlarm(){
+    setMuted(false);
+    try { audioRef.current?.play(); } catch(e) {}
+  }
+  function stopAlarm(){
+    setMuted(true);
+    audioRef.current?.pause();
+    if(audioRef.current) audioRef.current.currentTime = 0;
+  }
+  useEffect(()=>{ load(); if(!supabase) return; const ch=supabase.channel('orders-live').on('postgres_changes',{event:'INSERT',schema:'public',table:'orders'}, payload=>{ load(); if(lastSeen.current !== payload.new.id){ lastSeen.current = payload.new.id; startAlarm(); setTimeout(()=>printOrder(payload.new), 400); }}).on('postgres_changes',{event:'UPDATE',schema:'public',table:'orders'}, load).subscribe(); return()=>supabase.removeChannel(ch); },[]);
+  async function updateStatus(id,status){ if(!supabase) return; await supabase.from('orders').update({status}).eq('id',id); load(); }
+  return <main className="admin" onClick={stopAlarm} onKeyDown={stopAlarm} tabIndex="0"><audio ref={audioRef} src="/pedido.wav" loop></audio><section className="hero"><div><span className="kicker"><BellRing size={16}/> Painel da loja</span><h1>Pedidos Verbo Hub</h1><p>Quando chegar pedido novo, toca som até alguém clicar ou tocar no painel. Também tenta imprimir automaticamente.</p></div><button className="primary" onClick={()=>window.print()}><Printer size={18}/> Imprimir tela</button></section>{!supabase && <div className="warn">Configure o Supabase no arquivo .env para sincronizar com o app anterior.</div>}{!muted && <div className="alarm"><BellRing/> Pedido novo tocando — clique em qualquer lugar para parar.</div>}<div className="orders">{orders.map(o=><article className="order" key={o.id}><header><div><b>{o.customer?.name || 'Cliente'}</b><small>{new Date(o.created_at).toLocaleString('pt-BR')}</small></div><strong>{money(o.total)}</strong></header><p>{o.customer?.phone} • {o.order_type}{o.customer?.address ? ` • ${o.customer.address}` : ''}</p>{o.items?.map(i=><div className="line" key={i.uid||i.id}>• {i.qty || 1}x {i.name} — {money(i.total || i.price)}{i.observation ? <small>Obs.: {i.observation}</small> : null}</div>)}<div className="statuses">{['novo','preparando','pronto','entregue','cancelado'].map(s=><button key={s} className={(o.status||'novo')===s?'on':''} onClick={()=>updateStatus(o.id,s)}>{s}</button>)}</div><button className="ghost print-one" onClick={()=>printOrder(o)}><Printer size={16}/> Imprimir este pedido</button></article>)}</div></main>;
+}
+
+function printOrder(o){
+  const html = `<html><head><title>Pedido Verbo Hub</title><style>body{font-family:monospace;padding:10px}.center{text-align:center}hr{border:0;border-top:1px dashed #000}.big{font-size:18px;font-weight:bold}</style></head><body><div class=center><b>VERBO HUB</b><br/>Burgers & Tapiocas</div><hr/><div class=big>Pedido: ${o.id || ''}</div><p>${new Date(o.created_at||Date.now()).toLocaleString('pt-BR')}</p><p>Cliente: ${o.customer?.name||''}<br/>Fone: ${o.customer?.phone||''}<br/>Tipo: ${o.order_type||''}<br/>${o.customer?.address?'Endereço: '+o.customer.address:''}</p><hr/>${(o.items||[]).map(i=>`<p><b>${i.qty||1}x ${i.name}</b><br/>${i.included?.length?'Inclusos: '+i.included.join(', ')+'<br/>':''}${i.addons?.length?'Extras: '+i.addons.map(a=>a.name).join(', ')+'<br/>':''}${i.observation?'Obs.: '+i.observation+'<br/>':''}${money(i.total||i.price)}</p>`).join('')}<hr/><p>Pagamento: ${o.payment_method||''}</p><div class=big>Total: ${money(o.total||0)}</div><script>window.print(); setTimeout(()=>window.close(),800)</script></body></html>`;
+  const w = window.open('', '_blank', 'width=420,height=700');
+  if(w){ w.document.write(html); w.document.close(); }
+}
+
 createRoot(document.getElementById('root')).render(<App/>);
